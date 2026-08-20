@@ -1,0 +1,236 @@
+---
+title: "GIS for Natural Diaster Response"
+format: html
+editor: visual
+---
+
+### Welcome to our first DS 422 notebook
+
+With the recent power outages from Hurricane Lala, let's explore how we can apply GIS skills to natural disaster management.
+
+#### Data
+
+We will start with the [Eagle-I Power Outage Dataset for 2025](https://www.osti.gov/biblio/3012826) from Oak Ridge National Laboratory.
+
+#### Libraries
+
+```{r}
+library(tidyverse)
+library(here)
+library(sf)
+library(tidycensus)
+library(arrow)
+library(tigris)
+library(sf)
+library(ggiraph)
+```
+
+I downloaded the original dataset from the link above, filtered to only Hawaii outages, and converted the csv to a feather file to shrink the size for ease of sharing and loading
+
+```{r}
+eagle_i_hawaii <- read_feather(here("data/hawaii_outages_2025.feather"))
+```
+
+#### Your Turn - Exploratory Data Analysis
+
+Take 15 minutes to explore trends in this data, think summary stats, plots, etc..
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+#### Outages by county
+
+##### First filter out kalawao
+
+```{r}
+eagle_i_hawaii <- eagle_i_hawaii |> 
+  filter(county!= "Kalawao")
+```
+
+##### Next, we can count outages by county
+
+```{r}
+customers_out_by_county <- eagle_i_hawaii |> 
+  group_by(county) |> 
+  summarize(total_customers_out = sum(customers_out, na.rm = TRUE))
+```
+
+##### Your turn - Lets make a bar chart with ggplot
+
+```{r}
+ggplot(customers_out_by_county_with_pop, aes(y = county, x = outages_per_1000)) +
+  geom_col(fill = "firebrick") +
+  labs(
+    title = "Power Outages per 1,000 Residents by County",
+    x = "Outages per 1,000 residents",
+    y = NULL
+  ) +
+  theme_minimal()
+```
+
+##### What if we normalize?
+
+```{r}
+hi_pop <- get_acs(
+  geography = "county",
+  state = "HI",
+  variables = "B01003_001",  # total population
+  year = 2022
+) 
+```
+
+##### Joining our data
+
+```{r}
+hi_pop <- hi_pop |>
+  mutate(county = gsub(" County, Hawaii", "", NAME))
+
+hi_pop <- hi_pop |>
+  select(county, population = estimate)
+
+customers_out_by_county_with_pop <- customers_out_by_county |>
+  left_join(hi_pop, by = "county")
+```
+
+##### Normalizing
+
+```{r}
+customers_out_by_county_with_pop <- customers_out_by_county_with_pop |>
+  mutate(outages_per_1000 = (total_customers_out / population) * 1000)
+```
+
+##### Now Plot
+
+```{r}
+ggplot(customers_out_by_county_with_pop, aes(y = county, x = outages_per_1000)) +
+  geom_col(fill = "firebrick") +
+  labs(
+    title = "Power Outages per 1,000 Residents by County",
+    x = "Outages per 1,000 residents",
+    y = NULL
+  ) +
+  theme_minimal()
+```
+
+#### Outages over time
+
+```{r}
+outages_over_time <- ggplot(data = eagle_i_hawaii, aes (x = run_start_time, y = customers_out)) +
+  geom_line(linewidth = 0.2) +
+  theme_minimal()
+outages_over_time
+```
+
+```{r}
+ggplotly(outages_over_time)
+```
+
+##### Color by county
+
+```{r}
+county_outages_over_time <- ggplot(data = eagle_i_hawaii, aes (x = run_start_time, y = customers_out, color = county)) +
+  geom_line(linewidth = 0.2) +
+  theme_minimal()
+county_outages_over_time
+```
+
+```{r}
+ggplotly(county_outages_over_time)
+```
+
+##### Facet by county
+
+```{r}
+ggplot(data = eagle_i_hawaii, aes (x = run_start_time, y = customers_out)) +
+  geom_line(linewidth = 0.2) +
+  facet_wrap(~county, nrow = 4, scales = "free") +
+  theme_bw()
+```
+
+#### Map Outages 
+
+```{r}
+library(tigris)
+library(sf)
+library(ggplot2)
+library(dplyr)
+
+# Get Hawaii county boundaries
+hi_counties_sf <- counties(state = "HI", cb = TRUE, year = 2022) |>
+  mutate(county = gsub(" County", "", NAME)) |>
+  filter(county != "Kalawao") |>
+  left_join(customers_out_by_county_with_pop, by = "county") |> 
+  st_crop(xmin = -160.5, xmax = -154.5, ymin = 18.5, ymax = 22.5)
+
+```
+
+```{r}
+ggplot(hi_counties_sf) +
+  geom_sf(aes(fill = outages_per_1000)) +
+  scale_fill_viridis_c(option = "inferno", name = "Outages\nper 1,000") +
+  labs(title = "Power Outages per 1,000 Residents by County") +
+  theme_void()
+```
+
+##### Bonus
+
+```{r}
+p1 <- ggplot(hi_counties_sf, aes(
+  x = reorder(county, outages_per_1000),
+  y = outages_per_1000,
+  tooltip = paste0(county, ": ", round(outages_per_1000, 1), " per 1,000"),
+  data_id = county,
+  fill = outages_per_1000
+)) +
+  geom_col_interactive() +
+  coord_flip() +
+  scale_fill_viridis_c(option = "inferno") +
+  labs(x = NULL, y = "Outages per 1,000 residents", fill = NULL) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# ------------------------------------------------------------
+# 3. Choropleth map (interactive, severity-colored)
+# ------------------------------------------------------------
+
+p2 <- ggplot(hi_counties_sf) +
+  geom_sf_interactive(
+    aes(fill = outages_per_1000,
+        tooltip = paste0(county, ": ", round(outages_per_1000, 1), " per 1,000"),
+        data_id = county),
+    color = "white"
+  ) +
+  scale_fill_viridis_c(option = "inferno", name = "Outages\nper 1,000") +
+  coord_sf() +
+  theme_void()
+
+# ------------------------------------------------------------
+# 4. Combine and make interactive
+# ------------------------------------------------------------
+
+combined_plot <- p1 + p2 + plot_layout(widths = c(1, 1.2))
+
+interactive_plot <- girafe(ggobj = combined_plot, width_svg = 10, height_svg = 5)
+interactive_plot <- girafe_options(
+  interactive_plot,
+  opts_hover(css = "stroke:black;stroke-width:2px;"),
+  opts_hover_inv(css = "opacity:0.3;")
+)
+
+interactive_plot
+```
+
+#### Whats Next?
+
+This seems like a good start to understanding power outages, but is fairly limited with the county level granularity of the data. Another option to measure power outages is utilizing the [blackmarbler](https://worldbank.github.io/blackmarbler/index.html) package.
+
+**BlackMarbleR** is a R package that provides a simple way to use nighttime lights data from NASA’s Black Marble. [Black Marble](https://blackmarble.gsfc.nasa.gov/) is a [NASA Earth Science Data Systems (ESDS)](https://www.earthdata.nasa.gov/) project that provides a product suite of daily, monthly and yearly global [nighttime lights](https://www.earthdata.nasa.gov/topics/human-dimensions/nighttime-lights). This package automates the process of downloading all relevant tiles from the [NASA LAADS DAAC](https://ladsweb.modaps.eosdis.nasa.gov/) to cover a region of interest, converting and mosaicing the raw files (in HDF5 format) to georeferenced rasters.
+
+#### Your Turn 
+
+[Follow the steps here](https://worldbank.github.io/blackmarbler/#installation) to generate the first 2 visualizations of nighttime lights in Ghana (map and bar chart). Stop at "Workflow to Update Data". We will tweak this analysis to measure power outages in Honolulu county pre/during/post severe weather events with known outages from the eagle-i dataset
