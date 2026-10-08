@@ -180,6 +180,8 @@ ui <- page_sidebar(
   
   layout_columns(
     
+    
+    
     value_box(
       title = "Coastal Sites",
       value = textOutput("total_sites")
@@ -325,20 +327,27 @@ server <- function(input, output, session) {
   
   # 7. MAP COLORS -------------------------------------------
   
-  time_palette <- colorFactor(
-    palette = c(
-      "0-5 min" = "#2ECC71",
-      "5-10 min" = "#F1C40F",
-      "10-20 min" = "#E67E22",
-      "20+ min" = "#E74C3C"
-    ),
-    domain = c(
-      "0-5 min",
-      "5-10 min",
-      "10-20 min",
-      "20+ min"
-    )
+  time_labels <- c(
+    "0-5 min",
+    "5-10 min",
+    "10-20 min",
+    "20+ min"
   )
+  
+  time_colors <- c(
+    "#2ECC71",  # Green: 0-5 minutes
+    "#F1C40F",  # Yellow: 5-10 minutes
+    "#E67E22",  # Orange: 10-20 minutes
+    "#E74C3C"   # Red: 20+ minutes
+  )
+  
+  time_palette <- leaflet::colorFactor(
+    palette = time_colors,
+    domain = time_labels,
+    ordered = TRUE
+  )
+  
+
   
   # 8. INTERACTIVE MAP --------------------------------------
   
@@ -381,8 +390,8 @@ server <- function(input, output, session) {
         radius = 7,
         stroke = TRUE,
         weight = 1,
-        color = ~time_palette(category),
-        fillColor = ~time_palette(category),
+        color = ~time_palette(as.character(category)),
+        fillColor = ~time_palette(as.character(category)),
         fillOpacity = 0.85,
         popup = ~paste0(
           "<b>Coastal Site</b>",
@@ -432,9 +441,10 @@ server <- function(input, output, session) {
     map |>
       addLegend(
         position = "bottomright",
-        pal = time_palette,
-        values = data$category,
-        title = "Hypothetical Time"
+        colors = time_colors,
+        labels = time_labels,
+        title = "Hypothetical Time",
+        opacity = 1
       )
     
   })
@@ -545,4 +555,3 @@ shinyApp(
   ui = ui,
   server = server
 )
-
