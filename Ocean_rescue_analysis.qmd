@@ -1,0 +1,638 @@
+---
+title: "Ocean Rescue Accessibility Across Oʻahu"
+author: "DJ"
+---
+
+# Introduction
+
+Ocean rescue accessibility is an important part of emergency preparedness on Oʻahu, Hawaiʻi.
+
+This project examines three types of coastal emergency accessibility:
+
+1.  Swimming and shoreline rescue access
+2.  Lifeguard response
+3.  Coast Guard marine response
+
+# Research Question
+
+**How does estimated accessibility to swimming rescue, lifeguard response, and Coast Guard services vary across Oʻahu?**
+
+# Data Sources
+
+- [Honolulu Lifeguard Towers](https://data.honolulu.gov/d/8crx-qhct)
+- [Hawaiʻi GIS Body Surfing Sites](https://geodata.hawaii.gov/arcgis/rest/services/CoastalMarine/MapServer/9)
+- [Hawaiʻi GIS Shoreline Access](https://geodata.hawaii.gov/arcgis/rest/services/CoastalMarine/MapServer/25)
+- [Hawaiʻi GIS Data Catalog](https://planning.hawaii.gov/gis/download-gis-data-expanded/)
+- [USCG Sector Honolulu](https://www.pacificarea.uscg.mil/Our-Organization/Oceania-District/Oceania-District-Units/Sector-Honolulu/Sector-Honolulu-Units/)
+- [NOAA Electronic Navigational Charts](https://charts.noaa.gov/ENCs/ENCs.shtml)
+
+```{r}
+#| label: setup
+
+library(sf)
+library(dplyr)
+library(leaflet)
+library(ggplot2)
+library(knitr)
+```
+
+```{r}
+#| label: load-gis-data
+
+data_dir <- "data"
+
+required_files <- c(
+  "lifeguards.geojson",
+  "body_surfing.geojson",
+  "shoreline_access.geojson",
+  "oahu_roads.geojson"
+)
+
+missing_files <- required_files[
+  !file.exists(file.path(data_dir, required_files))
+]
+
+if (length(missing_files) > 0) {
+  stop(
+    "Missing files: ",
+    paste(missing_files, collapse = ", ")
+  )
+}
+
+lifeguards <- st_read(
+  file.path(data_dir, "lifeguards.geojson"),
+  quiet = TRUE
+) |> st_transform(4326)
+
+body_surfing <- st_read(
+  file.path(data_dir, "body_surfing.geojson"),
+  quiet = TRUE
+) |> st_transform(4326)
+
+shoreline <- st_read(
+  file.path(data_dir, "shoreline_access.geojson"),
+  quiet = TRUE
+) |> st_transform(4326)
+
+roads <- st_read(
+  file.path(data_dir, "oahu_roads.geojson"),
+  quiet = TRUE
+) |> st_transform(4326)
+
+# Coast Guard facility table is optional.
+coast_guard_file <- file.path(
+  data_dir,
+  "coast_guard_facilities.csv"
+)
+
+if (file.exists(coast_guard_file)) {
+  coast_guard <- read.csv(coast_guard_file)
+} else {
+  coast_guard <- data.frame(
+    name = character(),
+    address = character()
+  )
+}
+```
+
+```{r}
+#| label: filter-oahu
+
+oahu_bbox <- st_bbox(
+  c(
+    xmin = -158.30,
+    ymin = 21.20,
+    xmax = -157.60,
+    ymax = 21.75
+  ),
+  crs = st_crs(4326)
+)
+
+oahu_extent <- st_as_sfc(oahu_bbox)
+
+lifeguards <- st_filter(
+  lifeguards, oahu_extent
+)
+
+body_surfing <- st_filter(
+  body_surfing, oahu_extent
+)
+
+shoreline <- st_filter(
+  shoreline, oahu_extent
+)
+
+roads <- st_filter(
+  roads, oahu_extent
+)
+```
+
+```{r}
+#| label: dataset-summary
+
+summary_table <- data.frame(
+  Dataset = c(
+    "Lifeguard Towers",
+    "Body Surfing Sites",
+    "Shoreline Access Points",
+    "Road Segments"
+  ),
+  Features = c(
+    nrow(lifeguards),
+    nrow(body_surfing),
+    nrow(shoreline),
+    nrow(roads)
+  )
+)
+
+knitr::kable(
+  summary_table,
+  caption = "GIS features within the preliminary Oʻahu extent"
+)
+```
+
+```{r}
+#| label: overview-map
+
+overview_map <- leaflet(
+  options = leafletOptions(preferCanvas = TRUE)
+) |>
+  addProviderTiles("CartoDB.Positron") |>
+  addPolylines(
+    data = roads,
+    color = "gray",
+    weight = 1,
+    opacity = 0.25,
+    group = "Road Network"
+  ) |>
+  addCircleMarkers(
+    data = lifeguards,
+    radius = 6,
+    color = "red",
+    group = "Lifeguard Towers"
+  ) |>
+  addCircleMarkers(
+    data = body_surfing,
+    radius = 5,
+    color = "blue",
+    group = "Swimming Sites"
+  ) |>
+  addCircleMarkers(
+    data = shoreline,
+    radius = 4,
+    color = "orange",
+    group = "Shoreline Access"
+  ) |>
+  addLayersControl(
+    overlayGroups = c(
+      "Road Network",
+      "Lifeguard Towers",
+      "Swimming Sites",
+      "Shoreline Access"
+    ),
+    options = layersControlOptions(
+      collapsed = FALSE
+    )
+  ) |>
+  setView(
+    lng = -157.95,
+    lat = 21.48,
+    zoom = 10
+  )
+
+overview_map
+```
+
+# Lifeguard Response Accessibility
+
+```{r}
+#| label: lifeguard-calculations
+
+lifeguards_utm <- st_transform(
+  lifeguards, 32604
+)
+
+surf_utm <- st_transform(
+  body_surfing, 32604
+)
+
+stopifnot(
+  nrow(lifeguards_utm) > 0,
+  nrow(surf_utm) > 0
+)
+
+nearest_lifeguard <- st_nearest_feature(
+  surf_utm,
+  lifeguards_utm
+)
+
+lifeguard_distance <- st_distance(
+  surf_utm,
+  lifeguards_utm[nearest_lifeguard, ],
+  by_element = TRUE
+)
+
+surf_utm$lifeguard_distance_km <-
+  as.numeric(lifeguard_distance) / 1000
+
+# Illustrative speed, not observed response speed.
+lifeguard_speed_kmh <- 5
+
+surf_utm$lifeguard_time_min <-
+  surf_utm$lifeguard_distance_km /
+  lifeguard_speed_kmh * 60
+
+surf_utm$lifeguard_category <- cut(
+  surf_utm$lifeguard_time_min,
+  breaks = c(-Inf, 5, 10, 20, Inf),
+  labels = c(
+    "0-5 min",
+    "5-10 min",
+    "10-20 min",
+    "20+ min"
+  )
+)
+```
+
+```{r}
+#| label: lifeguard-table
+
+lifeguard_results <- surf_utm |>
+  st_drop_geometry() |>
+  select(
+    lifeguard_distance_km,
+    lifeguard_time_min,
+    lifeguard_category
+  )
+
+knitr::kable(
+  head(lifeguard_results, 15),
+  digits = 2,
+  caption = "Illustrative lifeguard proximity results"
+)
+```
+
+```{r}
+#| label: lifeguard-map
+
+time_colors <- c(
+  "0-5 min" = "#2ECC71",
+  "5-10 min" = "#F1C40F",
+  "10-20 min" = "#E67E22",
+  "20+ min" = "#E74C3C"
+)
+
+lifeguard_pal <- colorFactor(
+  palette = time_colors,
+  domain = levels(surf_utm$lifeguard_category)
+)
+
+lifeguard_map <- leaflet() |>
+  addProviderTiles("CartoDB.Positron") |>
+  addCircleMarkers(
+    data = st_transform(surf_utm, 4326),
+    radius = 7,
+    color = ~lifeguard_pal(lifeguard_category),
+    fillColor = ~lifeguard_pal(lifeguard_category),
+    fillOpacity = 0.85,
+    popup = ~paste0(
+      "Nearest tower: ",
+      round(lifeguard_distance_km, 2),
+      " km<br>",
+      "Hypothetical time: ",
+      round(lifeguard_time_min, 1),
+      " min"
+    )
+  ) |>
+  addCircleMarkers(
+    data = lifeguards,
+    radius = 5,
+    color = "blue",
+    group = "Lifeguard Towers"
+  ) |>
+  addLegend(
+    position = "bottomright",
+    pal = lifeguard_pal,
+    values = surf_utm$lifeguard_category,
+    title = "Hypothetical Time"
+  ) |>
+  setView(
+    lng = -157.95,
+    lat = 21.48,
+    zoom = 10
+  )
+
+lifeguard_map
+```
+
+# Swimming and Shoreline Rescue Accessibility
+
+```{r}
+#| label: swimming-calculations
+
+shore_utm <- st_transform(
+  shoreline, 32604
+)
+
+stopifnot(nrow(shore_utm) > 0)
+
+nearest_shore <- st_nearest_feature(
+  surf_utm,
+  shore_utm
+)
+
+shore_distance <- st_distance(
+  surf_utm,
+  shore_utm[nearest_shore, ],
+  by_element = TRUE
+)
+
+surf_utm$swim_distance_km <-
+  as.numeric(shore_distance) / 1000
+
+# Illustrative swimming speed
+swim_speed_kmh <- 2
+
+surf_utm$swim_time_min <-
+  surf_utm$swim_distance_km /
+  swim_speed_kmh * 60
+
+surf_utm$swim_category <- cut(
+  surf_utm$swim_time_min,
+  breaks = c(-Inf, 5, 10, 20, Inf),
+  labels = c(
+    "0-5 min",
+    "5-10 min",
+    "10-20 min",
+    "20+ min"
+  )
+)
+```
+
+```{r}
+#| label: swimming-table
+
+swim_results <- surf_utm |>
+  st_drop_geometry() |>
+  select(
+    swim_distance_km,
+    swim_time_min,
+    swim_category
+  )
+
+knitr::kable(
+  head(swim_results, 15),
+  digits = 2,
+  caption = "Illustrative shoreline-to-site accessibility"
+)
+```
+
+```{r}
+#| label: swimming-map
+
+swim_pal <- colorFactor(
+  palette = time_colors,
+  domain = levels(surf_utm$swim_category)
+)
+
+swim_map <- leaflet() |>
+  addProviderTiles("CartoDB.Positron") |>
+  addCircleMarkers(
+    data = st_transform(surf_utm, 4326),
+    radius = 7,
+    color = ~swim_pal(swim_category),
+    fillColor = ~swim_pal(swim_category),
+    fillOpacity = 0.85,
+    popup = ~paste0(
+      "Shore access distance: ",
+      round(swim_distance_km, 2),
+      " km<br>",
+      "Hypothetical swim time: ",
+      round(swim_time_min, 1),
+      " min"
+    )
+  ) |>
+  addCircleMarkers(
+    data = shoreline,
+    radius = 4,
+    color = "orange",
+    group = "Shoreline Access"
+  ) |>
+  addLegend(
+    position = "bottomright",
+    pal = swim_pal,
+    values = surf_utm$swim_category,
+    title = "Hypothetical Swim Time"
+  ) |>
+  setView(
+    lng = -157.95,
+    lat = 21.48,
+    zoom = 10
+  )
+
+swim_map
+```
+
+# Coast Guard Response Accessibility
+
+```{r}
+#| label: coast-guard-table
+
+if (nrow(coast_guard) > 0) {
+  knitr::kable(
+    coast_guard,
+    caption = "Available Coast Guard facility records"
+  )
+} else {
+  cat(
+    "Coast Guard facility data has not been added."
+  )
+}
+```
+
+```{r}
+#| label: coast-guard-map
+
+has_coordinates <- all(
+  c("longitude", "latitude") %in% names(coast_guard)
+)
+
+if (has_coordinates) {
+
+  valid_rows <- !is.na(coast_guard$longitude) &
+    !is.na(coast_guard$latitude)
+
+  valid_facilities <- coast_guard[
+    valid_rows,
+    ,
+    drop = FALSE
+  ]
+
+} else {
+
+  valid_facilities <- coast_guard[FALSE, , drop = FALSE]
+
+}
+
+if (nrow(valid_facilities) > 0) {
+
+  coast_guard_sf <- st_as_sf(
+    valid_facilities,
+    coords = c("longitude", "latitude"),
+    crs = 4326
+  )
+
+  leaflet(coast_guard_sf) |>
+    addProviderTiles("CartoDB.Positron") |>
+    addCircleMarkers(
+      radius = 8,
+      color = "purple",
+      popup = "Coast Guard facility"
+    ) |>
+    setView(
+      lng = -157.95,
+      lat = 21.48,
+      zoom = 10
+    )
+
+} else {
+
+  cat(
+    "Coast Guard facility coordinates are not yet ",
+    "verified. No station point is plotted."
+  )
+
+}
+```
+
+```{r}
+#| label: marine-time-function
+
+marine_time <- function(
+  distance_nm,
+  speed_knots,
+  mobilization_min = 0
+) {
+
+  if (
+    any(distance_nm < 0) ||
+    any(speed_knots <= 0) ||
+    any(mobilization_min < 0)
+  ) {
+    stop("Invalid marine travel-time inputs.")
+  }
+
+  mobilization_min +
+    (distance_nm / speed_knots) * 60
+}
+
+# Mathematical example only:
+# 10 nautical miles at 20 knots.
+marine_time(
+  distance_nm = 10,
+  speed_knots = 20
+)
+```
+
+```{r}
+#| label: comparison-table
+
+comparison <- data.frame(
+  Service = c(
+    "Lifeguard Proximity",
+    "Swimming / Shoreline Access"
+  ),
+  Mean_Distance_km = c(
+    mean(surf_utm$lifeguard_distance_km),
+    mean(surf_utm$swim_distance_km)
+  ),
+  Mean_Time_min = c(
+    mean(surf_utm$lifeguard_time_min),
+    mean(surf_utm$swim_time_min)
+  ),
+  Maximum_Time_min = c(
+    max(surf_utm$lifeguard_time_min),
+    max(surf_utm$swim_time_min)
+  )
+)
+
+knitr::kable(
+  comparison,
+  digits = 2,
+  caption = "Preliminary hypothetical accessibility scenarios"
+)
+```
+
+```{r}
+#| label: comparison-chart
+
+ggplot(
+  comparison,
+  aes(
+    x = Service,
+    y = Mean_Time_min,
+    fill = Service
+  )
+) +
+  geom_col(show.legend = FALSE) +
+  labs(
+    title = "Mean Hypothetical Travel Time",
+    x = "Accessibility Scenario",
+    y = "Minutes"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(
+      angle = 15,
+      hjust = 1
+    )
+  )
+```
+
+```{r}
+#| label: export-results
+
+dir.create(
+  "outputs",
+  showWarnings = FALSE
+)
+
+st_write(
+  st_transform(surf_utm, 4326),
+  "outputs/ocean_rescue_accessibility.geojson",
+  delete_dsn = TRUE,
+  quiet = TRUE
+)
+
+write.csv(
+  comparison,
+  "outputs/ocean_rescue_summary.csv",
+  row.names = FALSE
+)
+
+cat("Results saved in the outputs folder.")
+```
+
+# Limitations
+
+This analysis is preliminary and exploratory.
+
+The lifeguard and swimming accessibility models use straight-line distances and hypothetical travel speeds.
+
+The models do not account for actual dispatch, staff availability, currents, waves, reefs, equipment, or rescue procedures.
+
+Body-surfing sites are used as sample coastal destinations rather than observed emergency incident locations.
+
+The study area is defined using an approximate bounding box rather than an official island boundary.
+
+Coast Guard response times are not calculated because operational marine departure locations and navigable routes have not been verified.
+
+# Conclusion
+
+This project provides an initial geospatial assessment of swimming and lifeguard accessibility across Oʻahu.
+
+It also establishes a data framework for future Coast Guard marine accessibility analysis.
+
+The preliminary models help demonstrate how geographic distance and assumed travel speeds can be used to investigate potential coastal accessibility differences.
+
+Further operational and marine data are required before these results can support conclusions about actual emergency response performance.
