@@ -1,0 +1,199 @@
+---
+title: "Isochrones"
+format: html
+editor: visual
+---
+
+## What is an Isochrone?
+
+An **isochrone** is a line or polygon on a map that connects all locations that can be reached from a specific starting point within a given amount of time.
+
+For this analysis, I will create a drive-time accessibility surface centered on **Chaminade University of Honolulu**.
+
+[Inspiration from Kyle Walker](https://walker-data.com/posts/accessibility-surface/)
+
+## Libraries
+
+```{r}
+library(mapboxapi)
+library(leaflet)
+library(mapview)
+library(sf)
+library(fasterize)
+library(raster)
+```
+
+## Create Isochrones
+
+First, create drive-time isochrones around Chaminade University.
+
+```{r}
+isos <- mb_isochrone(
+  location = "3140 Waialae Ave, Honolulu, HI 96816",
+  profile = "driving",
+  time = 1:45
+)
+```
+
+The `time = 1:45` argument creates drive-time boundaries for each minute from 1 to 45 minutes.
+
+## View the Isochrones
+
+Before creating the accessibility surface, we can inspect the individual isochrone polygons.
+
+```{r}
+mapview(
+  isos,
+  zcol = "time"
+)
+```
+
+## Create an Accessibility Surface
+
+The isochrone polygons can be converted into a raster surface that represents estimated drive time from Chaminade University.
+
+### Reproject the Isochrones
+
+Because raster calculations work better in a projected coordinate system, transform the data to **UTM Zone 4N**, which covers Honolulu.
+
+```{r}
+isos_proj <- st_transform(
+  isos,
+  crs = 32604
+)
+```
+
+### Create a Raster Template
+
+Create a raster grid with a resolution of 100 meters.
+
+```{r}
+template <- raster(
+  isos_proj,
+  resolution = 100
+)
+```
+
+### Rasterize the Isochrones
+
+Convert the isochrone polygons into a raster surface using drive time as the raster value.
+
+```{r}
+iso_surface <- fasterize(
+  isos_proj,
+  template,
+  field = "time",
+  fun = "min"
+)
+
+iso_surface
+```
+
+## Create the Color Palette
+
+Create a continuous color scale based on drive time.
+
+```{r}
+pal <- colorNumeric(
+  palette = "plasma",
+  domain = isos$time,
+  na.color = "transparent"
+)
+```
+
+## Create the Chaminade Logo Marker
+
+Create a custom Leaflet icon using the Chaminade athletics logo.
+
+```{r}
+chaminade_icon <- makeIcon(
+  iconUrl = "images/Athletics_C.png",
+  iconWidth = 50,
+  iconHeight = 50
+)
+```
+
+## Get Chaminade's Coordinates
+
+Use Mapbox geocoding to retrieve the longitude and latitude of Chaminade University.
+
+```{r}
+chaminade <- mb_geocode(
+  "3140 Waialae Ave, Honolulu, HI 96816"
+)
+
+chaminade
+```
+
+## Create the Final Accessibility Map
+
+Now combine the basemap, accessibility surface, legend, and Chaminade logo into one interactive Leaflet map.
+
+```{r}
+chaminade_map <- leaflet() %>%
+  
+  addMapboxTiles(
+    style_id = "light-v9",
+    username = "mapbox",
+    scaling_factor = "0.5x"
+  ) %>%
+  
+  addRasterImage(
+    iso_surface,
+    colors = pal,
+    opacity = 0.5
+  ) %>%
+  
+  addLegend(
+    values = isos$time,
+    pal = pal,
+    title = "Drive-time from<br>Chaminade University"
+  ) %>%
+  
+  addMarkers(
+    lng = chaminade[1],
+    lat = chaminade[2],
+    icon = chaminade_icon,
+    popup = "Chaminade University of Honolulu"
+  )
+
+chaminade_map
+```
+
+## Going Further
+
+The Chaminade accessibility surface demonstrates how isochrones can be used to visualize travel time from a single location.
+
+A larger project could use the same method to investigate access to important emergency services across Oʻahu.
+
+### Research Question
+
+**How accessible are critical emergency services across Oʻahu based on driving time?**
+
+Potential locations could include:
+
+- fire_stations: mb_isochrone works well
+
+  -ambulance:
+
+  -shelters:
+
+  can't go off based travel time in island wide emergency situations
+
+  -hospital, trauma centers, etc,.
+
+  -police stations, hostage situation
+
+  -swim, lifeguard response, coast guard response -DJ
+
+  The locations could eventually be combined into an interactive **Shiny application** where users could select different types of emergency services and compare travel-time accessibility across the island.
+
+```{r}
+library(sf)
+library(dplyr)
+library(leaflet)
+library(mapview)
+library(ggplot2)
+library(units)
+library(osmdata)
+```
